@@ -198,17 +198,52 @@ local function chapterURL(storyId, chapterIndex)
 	return "/s/" .. storyId .. "/" .. tostring(chapterIndex) .. "/"
 end
 
+local function storyRootURL(storyId)
+	return "/s/" .. storyId .. "/"
+end
+
+local function extractPassageFromDocument(document, chapterPath)
+	local bodyText = document:text() or ""
+	if bodyText:find("Story Not Found", 1, true) then
+		return nil, "Story not found: " .. tostring(chapterPath)
+	end
+	local chap = document:selectFirst("#storytext, #storycontent, .storytextp .storytext")
+	if chap == nil then
+		if bodyText:find("Story does not have any chapters", 1, true)
+				or bodyText:find("FanFiction.Net Message Type", 1, true) then
+			return nil, "no-chapters"
+		end
+		return nil, "Could not find story text for " .. tostring(chapterPath)
+	end
+	chap:select(".landmark"):remove()
+	chap = cleanupDocument(chap)
+	return pageOfElem(chap, true), nil
+end
+
 --- @param chapterPath string
 --- @return string
 local function getPassage(chapterPath)
 	local document = GETDocument(expandURL(chapterPath))
-	local chap = document:selectFirst("#storytext, #storycontent, .storytextp .storytext")
-	if chap == nil then
-		error("Could not find story text for " .. tostring(chapterPath))
+	local passage, err = extractPassageFromDocument(document, chapterPath)
+	if passage ~= nil then
+		return passage
 	end
-	chap:select(".landmark"):remove()
-	chap = cleanupDocument(chap)
-	return pageOfElem(chap, true)
+
+	-- Some stories publish text only on /s/{id}/ and reject /s/{id}/1/ with Message Type 1.
+	local storyId = storyIdFromURL(chapterPath)
+	if err == "no-chapters" and storyId ~= nil then
+		local rootPath = storyRootURL(storyId)
+		if shrinkURL(chapterPath) ~= rootPath then
+			local rootDoc = GETDocument(expandURL(rootPath))
+			local rootPassage, rootErr = extractPassageFromDocument(rootDoc, rootPath)
+			if rootPassage ~= nil then
+				return rootPassage
+			end
+			err = rootErr or err
+		end
+	end
+
+	error(err or ("Could not find story text for " .. tostring(chapterPath)))
 end
 
 local function startsWith(str, start)
@@ -651,13 +686,42 @@ local function buildChapters(document, storyId, novelTitle)
 		return chapters
 	end
 
-	return {
-		NovelChapter {
-			order = 1,
-			title = novelTitle,
-			link = chapterURL(storyId, 1)
+	-- Single-chapter stories often have no dropdown; text lives on /s/{id}/ (and sometimes not on /1/).
+	if storyId ~= nil and document:selectFirst("#storytext, #storycontent, .storytextp .storytext") ~= nil then
+		return {
+			NovelChapter {
+				order = 1,
+				title = novelTitle or "Chapter 1",
+				link = storyRootURL(storyId)
+			}
 		}
-	}
+	end
+
+	local chapterCount = tonumber((html:match("Chapters:%s*([%d,]+)") or ""):gsub(",", ""))
+	if chapterCount ~= nil and chapterCount > 0 and storyId ~= nil then
+		local chapters = {}
+		for i = 1, chapterCount do
+			table.insert(chapters, NovelChapter {
+				order = i,
+				title = "Chapter " .. tostring(i),
+				link = chapterURL(storyId, i)
+			})
+		end
+		return chapters
+	end
+
+	-- "Chapters:" omitted on profile usually means a one-shot; only if words are present.
+	if chapterCount == nil and html:match("Words:%s*[%d,]+") and storyId ~= nil then
+		return {
+			NovelChapter {
+				order = 1,
+				title = novelTitle or "Chapter 1",
+				link = storyRootURL(storyId)
+			}
+		}
+	end
+
+	return {}
 end
 
 --- @param novelURL string
@@ -837,6 +901,15 @@ local function parseListingDocument(document)
 		if novel == nil then
 			return
 		end
+		-- Prefer entries that already have published chapter text; brand-new stubs break passage tests.
+		local rowText = row:text() or ""
+		local chaptersMeta = rowText:match("Chapters:%s*([%d,]+)")
+		if chaptersMeta ~= nil then
+			local n = tonumber((chaptersMeta:gsub(",", ""))) or 0
+			if n < 1 then
+				return
+			end
+		end
 		local link = novel:getLink()
 		if link ~= nil and seen[link] then
 			return
@@ -988,8 +1061,12 @@ local function getDefaultListing(data, inc)
 	if page < 1 then
 		page = 1
 	end
-	-- Avoid HttpUrl builders; plain GET matches the working reference extension.
-	local url = expandURL("/j/0/0/0/?p=" .. tostring(page))
+	-- Just In path is /j/{category}/{sort}/{language}/ — `?p=` is rejected (Error Type 1).
+	-- There is no reliable offset pagination for Just In; only the first page is available.
+	if page ~= 1 then
+		return {}
+	end
+	local url = expandURL("/j/0/0/0/")
 	local document = GETDocument(url)
 	return parseListingDocument(document)
 end
@@ -1094,7 +1171,8 @@ return {
 	chapterType = ChapterType.HTML,
 
 	listings = {
-		Listing("Default", true, getDefaultListing),
+		-- Just In has no stable page index (`?p=` is rejected); only the first page is available.
+		Listing("Default", false, getDefaultListing),
 		Listing("How to use", false, function()
 			return {
 				Novel {
