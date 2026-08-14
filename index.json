@@ -166,11 +166,11 @@
       "id": 1308639979,
       "name": "FanFiction.net",
       "fileName": "FanFictionNet",
-      "imageURL": "",
+      "imageURL": "https://www.fanfiction.net/static/icons3/ff-icon-192.png",
       "lang": "all",
-      "ver": "1.0.1",
+      "ver": "1.0.6",
       "libVer": "1.0.0",
-      "md5": "6f746cc3fa1246140dc86de68fafbb14ebf2ce7e06b6095f9a13d7d08a47665b",
+      "md5": "a88c58275f2082eede6f0841d4d32f2233bbeee3e678e4af6ac4047fedca408f",
       "type": "LuaScript"
     }
   ],
