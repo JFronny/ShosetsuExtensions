@@ -1,4 +1,4 @@
--- {"id":1308639979,"ver":"1.0.9","libVer":"1.0.0","author":"Jobobby04"}
+-- {"id":1308639979,"ver":"1.0.10","libVer":"1.0.0","author":"Jobobby04"}
 
 local url = Require("url")
 
@@ -653,6 +653,20 @@ local function parseNovel(novelURL, loadChapters)
 	local normalized = normalizeNovelURL(novelURL)
 	-- Android clients often receive mobile HTML without #profile_top / span.xgray.
 	local document = GETDocument(expandURL(normalized))
+
+	-- Some stories return "Message Type 1" with trailing slash; retry without it
+	if document:selectFirst("#profile_top") == nil then
+		local body = document:selectFirst("body")
+		local bodyText = body and body:text() or document:text()
+		if bodyText:find("Message Type", 1, true)
+			or bodyText:find("Story does not have any chapters", 1, true) then
+			local noSlash = normalized:gsub("/$", "")
+			if noSlash ~= normalized then
+				document = GETDocument(expandURL(noSlash))
+				normalized = noSlash
+			end
+		end
+	end
 
 	local profile = document:selectFirst("#profile_top")
 	local novelTitle, thumbnail, authors, description, info
