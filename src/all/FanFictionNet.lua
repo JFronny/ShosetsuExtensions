@@ -1,4 +1,4 @@
--- {"id":1308639979,"ver":"1.0.12","libVer":"1.0.0","author":"Jobobby04"}
+-- {"id":1308639979,"ver":"1.0.13","libVer":"1.0.0","author":"Jobobby04"}
 
 local url = Require("url")
 
@@ -586,7 +586,7 @@ local function parseNovel(novelURL, loadChapters)
 
 	-- Some stories return "Message Type 1" with trailing slash; retry without it
 	if document:selectFirst("#profile_top") == nil then
-		local body = document:selectFirst("body")
+		local body = document:selectFirst("span")
 		local bodyText = body and body:text() or document:text()
 		if bodyText:find("Message Type", 1, true)
 			or bodyText:find("Story does not have any chapters", 1, true) then
