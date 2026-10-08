@@ -793,10 +793,10 @@ end
 local function getDefaultListing(sort)
 	-- Just In path is /j/{category}/{sort}/{language}/ — `?p=` is rejected (Error Type 1).
 	-- There is no reliable offset pagination for Just In; only the first page is available.
-    return function()
-	    local document = GETDocument(expandURL("/j/0/" .. sort .. "/0/"))
-    	return parseListingDocument(document)
-    end
+	return function()
+		local document = GETDocument(expandURL("/j/0/" .. sort .. "/0/"))
+		return parseListingDocument(document)
+	end
 end
 
 --- @param filters table @of applied filter values [QUERY] is the search query, may be empty
