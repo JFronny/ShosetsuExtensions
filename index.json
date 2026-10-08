@@ -181,9 +181,9 @@
 			"fileName": "FanFictionNet",
 			"imageURL": "https://www.fanfiction.net/static/icons3/ff-icon-192.png",
 			"lang": "all",
-			"ver": "1.0.6",
+			"ver": "1.0.12",
 			"libVer": "1.0.0",
-			"md5": "97d0e35fec9efca1d7dd22efee3d9e55255a99f1999e4062ea347e3c5776b93c",
+			"md5": "c61b2df863baa955bf8b3f2e5720ced0ec53c31de4a602d1ae799581c557b0b3",
 			"type": "LuaScript"
 		}
 	],

@@ -1,4 +1,4 @@
--- {"id":1308639979,"ver":"1.0.10","libVer":"1.0.0","author":"Jobobby04"}
+-- {"id":1308639979,"ver":"1.0.12","libVer":"1.0.0","author":"Jobobby04"}
 
 local url = Require("url")
 
@@ -429,47 +429,29 @@ local function extractImage(element)
 			return expandURL(src)
 		end
 	end
-	-- Last resort: allow plain src even if it looks generic
-	local src = img:attr("src")
-	if src ~= nil and src ~= "" and not isPlaceholderImage(src) then
-		return expandURL(src)
-	end
 	return nil
 end
 
 --- Prefer #profile_top / #img_large story art; fall back to raw HTML /image/ paths.
 local function extractStoryImage(document, profile)
-	local order = {}
 	if profile ~= nil then
-		table.insert(order, profile)
-		table.insert(order, profile:selectFirst("img.cimage"))
-		table.insert(order, profile:selectFirst("img"))
+		local url = extractImage(profile)
+				or extractImage(profile:selectFirst("img.cimage"))
+				or extractImage(profile:selectFirst("img"))
+		if url then return url end
 	end
 	if document ~= nil then
-		table.insert(order, document:selectFirst("#img_large img.cimage"))
-		table.insert(order, document:selectFirst("#img_large img"))
-		table.insert(order, document:selectFirst("img.cimage"))
-		table.insert(order, document:selectFirst("#profile_top img"))
-	end
-	for _, el in ipairs(order) do
-		local url = extractImage(el)
-		if url ~= nil then
-			return url
+		local url = extractImage(document:selectFirst("#img_large img.cimage"))
+				or extractImage(document:selectFirst("#img_large img"))
+				or extractImage(document:selectFirst("img.cimage"))
+				or extractImage(document:selectFirst("#profile_top img"))
+		if url then return url end
+		local html = document:html()
+		if html then
+			local path = html:match("data%-original%s*=%s*['\"](/image/[^'\"]+)['\"]")
+					or html:match("src%s*=%s*['\"](/image/[^'\"]+)['\"]")
+			if path then return expandURL(path) end
 		end
-	end
-	if document == nil then
-		return nil
-	end
-	local html = document:html()
-	if html == nil then
-		return nil
-	end
-	local path = html:match("data%-original%s*=%s*['\"](/image/[^'\"]+)['\"]")
-			or html:match("data%-original%s*=%s*['\"](https?://[^'\"]+/image/[^'\"]+)['\"]")
-			or html:match("src%s*=%s*['\"](/image/[^'\"]+)['\"]")
-			or html:match("src%s*=%s*['\"](https?://[^'\"]+/image/[^'\"]+)['\"]")
-	if path ~= nil then
-		return expandURL(path)
 	end
 	return nil
 end
@@ -518,52 +500,28 @@ local function parseInfoDataIntoNovelInfo(storyInfoDocument, novelURL, novelTitl
 	}
 end
 
-local function novelInfoFromParsed(infoData, novelURL, novelTitle, thumbnail, extras)
-	extras = extras or {}
-	local tags = {}
-	if infoData.rating ~= nil and infoData.rating ~= "" then
-		table.insert(tags, "Rating: " .. infoData.rating)
-	end
-	for _, v in ipairs(infoData.tags or {}) do
-		table.insert(tags, "Genre: " .. v)
-	end
-	for _, v in ipairs(infoData.relationships or {}) do
-		table.insert(tags, "Relationship: [" .. table.concat(v, ", ") .. "]")
-	end
-	if type(infoData.characters) == "table" then
-		for _, v in ipairs(infoData.characters) do
-			if type(v) == "string" then
-				table.insert(tags, "Character: " .. v)
-			end
-		end
-	elseif type(infoData.characters) == "string" and infoData.characters ~= "" then
-		for rawChar in (infoData.characters .. ","):gmatch("([^,]+)") do
-			local char = rawChar:match("^%s*(.-)%s*$")
-			if char ~= nil and char ~= "" then
-				table.insert(tags, "Character: " .. char)
-			end
-		end
-	end
-
-	local status = NovelStatus.PUBLISHING
-	if infoData.completed then
-		status = NovelStatus.COMPLETED
-	end
-
-	return NovelInfo {
-		title = novelTitle,
-		link = novelURL,
-		imageURL = thumbnail,
-		language = infoData.language,
-		description = extras.description,
-		authors = extras.authors,
-		wordCount = infoData.wordCount,
-		chapterCount = infoData.chapterCount,
-		commentCount = infoData.reviewCount,
-		favoriteCount = infoData.favCount,
-		status = status,
-		genres = tags,
+--- Single-chapter story: text lives on /s/{id}/.
+local function singleChapter(storyId, title)
+	return {
+		NovelChapter {
+			order = 1,
+			title = title,
+			link = storyRootURL(storyId)
+		}
 	}
+end
+
+--- Generate a generic chapter list when only the chapter count is known.
+local function genericChapters(storyId, count)
+	local chapters = {}
+	for i = 1, count do
+		table.insert(chapters, NovelChapter {
+			order = i,
+			title = "Chapter " .. tostring(i),
+			link = chapterURL(storyId, i)
+		})
+	end
+	return chapters
 end
 
 local function buildChapters(document, storyId, novelTitle)
@@ -588,51 +546,23 @@ local function buildChapters(document, storyId, novelTitle)
 	local html = document:html()
 	local chs = tonumber(html:match("var%s+chs%s*=%s*(%d+)"))
 	if chs ~= nil and chs > 0 and storyId ~= nil then
-		local chapters = {}
-		for i = 1, chs do
-			table.insert(chapters, NovelChapter {
-				order = i,
-				title = "Chapter " .. tostring(i),
-				link = chapterURL(storyId, i)
-			})
-		end
-		return chapters
+		return genericChapters(storyId, chs)
 	end
 
 	-- Single-chapter stories often have no dropdown; text lives on /s/{id}/ (and sometimes not on /1/).
 	if storyId ~= nil and document:selectFirst("#storytext, #storycontent, .storytextp .storytext") ~= nil then
-		return {
-			NovelChapter {
-				order = 1,
-				title = novelTitle or "Chapter 1",
-				link = storyRootURL(storyId)
-			}
-		}
+		return singleChapter(storyId, novelTitle or "Chapter 1")
 	end
 
 	local chapterMatch = html:match("Chapters:%s*([%d,]+)")
 	local chapterCount = chapterMatch and tonumber(chapterMatch:gsub(",", ""))
 	if chapterCount ~= nil and chapterCount > 0 and storyId ~= nil then
-		local chapters = {}
-		for i = 1, chapterCount do
-			table.insert(chapters, NovelChapter {
-				order = i,
-				title = "Chapter " .. tostring(i),
-				link = chapterURL(storyId, i)
-			})
-		end
-		return chapters
+		return genericChapters(storyId, chapterCount)
 	end
 
 	-- "Chapters:" omitted on profile usually means a one-shot; only if words are present.
 	if chapterCount == nil and html:match("Words:%s*[%d,]+") and storyId ~= nil then
-		return {
-			NovelChapter {
-				order = 1,
-				title = novelTitle or "Chapter 1",
-				link = storyRootURL(storyId)
-			}
-		}
+		return singleChapter(storyId, novelTitle or "Chapter 1")
 	end
 
 	return {}
@@ -645,7 +575,7 @@ local function parseNovel(novelURL, loadChapters)
 	if novelURL:match("^how") then
 		return NovelInfo {
 			title = "How to use this source",
-			description = "You can use this source by:\n1. Searching by keywords.\n2. Pasting a fanfiction.net story URL into search.\n3. Pasting a browse/category URL (for example /movie/Avengers/) into search and using filters.\n4. Opening the Default listing for recently updated stories."
+			description = "You can use this source by:\n1. Searching by keywords.\n2. Pasting a fanfiction.net story URL into search.\n3. Pasting a browse/category URL (for example /movie/Avengers/) into search and using filters.\n4. Opening the Default listing for recently updated stories.\n\nYou may need to open a novel in the webview before you can properly get its chapters"
 		}
 	end
 
@@ -727,21 +657,9 @@ end
 --- @param document Element
 --- @return NovelInfo
 local function parseBrowseNovel(document)
-	local titleElement = document:selectFirst("a.stitle") or document:selectFirst(".stitle")
-	if titleElement == nil then
-		-- Some mobile markup only has the story anchor
-		local anchors = document:select("a[href]")
-		if anchors ~= nil then
-			for i = 0, anchors:size() - 1 do
-				local a = anchors:get(i)
-				local href = a:attr("href") or ""
-				if href:match("/s/%d+") and (a:text() or "") ~= "" then
-					titleElement = a
-					break
-				end
-			end
-		end
-	end
+	local titleElement = document:selectFirst("a.stitle")
+			or document:selectFirst(".stitle")
+			or document:selectFirst("a[href*='/s/']")
 	if titleElement == nil then
 		return nil
 	end
@@ -749,8 +667,7 @@ local function parseBrowseNovel(document)
 	if title == nil or title == "" then
 		return nil
 	end
-	local href = titleElement:attr("href")
-	local url = normalizeNovelURL(href)
+	local url = normalizeNovelURL(titleElement:attr("href"))
 	local thumbnail = extractImage(titleElement)
 			or extractImage(document:selectFirst("img.cimage, img"))
 			or extractImage(document)
@@ -889,26 +806,13 @@ local function isBrowsePath(path)
 	return path:match("^/[^/]+/.+") ~= nil
 end
 
-local function getDefaultListing(data, inc)
-	local page = 1
-	if type(inc) == "number" then
-		page = inc
-	elseif type(data) == "number" then
-		page = data
-	elseif type(data) == "table" then
-		page = tonumber(data[PAGE]) or 1
-	end
-	if page < 1 then
-		page = 1
-	end
+local function getDefaultListing(sort)
 	-- Just In path is /j/{category}/{sort}/{language}/ — `?p=` is rejected (Error Type 1).
 	-- There is no reliable offset pagination for Just In; only the first page is available.
-	if page ~= 1 then
-		return {}
-	end
-	local url = expandURL("/j/0/0/0/")
-	local document = GETDocument(url)
-	return parseListingDocument(document)
+    return function()
+	    local document = GETDocument(expandURL("/j/0/" .. sort .. "/0/"))
+    	return parseListingDocument(document)
+    end
 end
 
 --- @param filters table @of applied filter values [QUERY] is the search query, may be empty
@@ -928,30 +832,21 @@ local function search(filters)
 		if page ~= 1 then
 			return {}
 		end
-		local novelUrl = normalizeNovelURL(query)
-		local novel = parseNovel(novelUrl, false)
-		return { novel }
+		return { parseNovel(normalizeNovelURL(query), false) }
 	end
 
 	local path = shrinkURL(query)
 	-- Full or relative browse/category URL
 	if query:find("fanfiction%.net") or isBrowsePath(path) then
-		local browseURL
-		if query:find("^https?://") or query:find("^//") then
-			browseURL = expandURL(shrinkURL(query))
-		else
-			browseURL = expandURL(path)
-		end
-		-- Strip existing page query then apply filters + page
-		browseURL = browseURL:gsub("[?&]p=%d+", ""):gsub("?$", "")
+		-- expandURL normalizes full, protocol-relative and relative paths alike
+		local browseURL = expandURL(path):gsub("[?&]p=%d+", ""):gsub("?$", "")
 		local queryMap = filterQueryMap(filters)
 		queryMap.p = tostring(page)
 		local document = GETDocument(url.querystring(queryMap, browseURL))
 		return parseListingDocument(document)
 	end
 
-	-- Keyword search — do not apply category-browse filter params (they empty results).
-	-- Filters are optional extras only where FFN search form understands them.
+	-- Keyword search
 	local searchParams = {
 		keywords = query,
 		ready = "1",
@@ -959,38 +854,18 @@ local function search(filters)
 		match = "any",
 		ppage = tostring(page),
 	}
-	-- Optional language only (common need); 0 means any
-	if filters[LANGUAGE_ID] ~= nil then
-		local lan = dropdownValue(LanguageOptions, filters[LANGUAGE_ID], 1)
-		if lan ~= nil and lan ~= "0" then
-			searchParams.languageid = lan
+	-- Optional filters for keyword search
+	local function searchFilter(key, id, opts, default, exclude)
+		local val = dropdownValue(opts, filters[id], default)
+		if val ~= nil and val ~= "0" and val ~= exclude then
+			searchParams[key] = val
 		end
 	end
-	if filters[STATUS_ID] ~= nil then
-		local st = dropdownValue(StatusOptions, filters[STATUS_ID], 1)
-		if st ~= nil and st ~= "0" then
-			searchParams.statusid = st
-		end
-	end
-	if filters[GENRE_A_ID] ~= nil then
-		local g = dropdownValue(GenreOptions, filters[GENRE_A_ID], 1)
-		if g ~= nil and g ~= "0" then
-			searchParams.genreid = g
-		end
-	end
-	if filters[GENRE_B_ID] ~= nil then
-		local g = dropdownValue(GenreOptions, filters[GENRE_B_ID], 1)
-		if g ~= nil and g ~= "0" then
-			searchParams.genreid2 = g
-		end
-	end
-	if filters[RATING_ID] ~= nil then
-		-- FFN search uses censorid roughly; keep simple — only pass when not All
-		local r = dropdownValue(RatingOptions, filters[RATING_ID], 1)
-		if r ~= nil and r ~= "10" then
-			searchParams.censorid = r
-		end
-	end
+	searchFilter("languageid", LANGUAGE_ID, LanguageOptions, 1)
+	searchFilter("statusid", STATUS_ID, StatusOptions, 1)
+	searchFilter("genreid", GENRE_A_ID, GenreOptions, 1)
+	searchFilter("genreid2", GENRE_B_ID, GenreOptions, 1)
+	searchFilter("censorid", RATING_ID, RatingOptions, 1, "10")
 
 	local searchURL = url.querystring(searchParams, expandURL("/search/"))
 	local document = GETDocument(searchURL)
@@ -1012,7 +887,11 @@ return {
 
 	listings = {
 		-- Just In has no stable page index (`?p=` is rejected); only the first page is available.
-		Listing("Default", false, getDefaultListing),
+		Listing("Just In: All Types", false, getDefaultListing(0)),
+		Listing("Just In: New Stories", false, getDefaultListing(1)),
+		Listing("Just In: Updated Stories", false, getDefaultListing(2)),
+		Listing("Just In: New Crossovers", false, getDefaultListing(3)),
+		Listing("Just In: Updated Crossovers", false, getDefaultListing(4)),
 		Listing("How to use", false, function()
 			return {
 				Novel {
