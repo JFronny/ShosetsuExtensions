@@ -1,8 +1,8 @@
--- {"id":1308639979,"ver":"1.0.6","libVer":"1.0.0","author":"Jobobby04"}
+-- {"id":1308639979,"ver":"1.0.9","libVer":"1.0.0","author":"Jobobby04"}
+
+local url = Require("url")
 
 local baseURL = "https://www.fanfiction.net"
-local settings = {}
-
 local SORT_ID = 2 -- srt
 local SortOptions = {
 	{ name = "Update Date", value = "1" },
@@ -142,18 +142,6 @@ local function expandURL(url)
 	return baseURL .. url
 end
 
-local function urlEncode(str)
-	if not str then
-		return ""
-	end
-	str = str:gsub("\n", "\r\n")
-	str = str:gsub("([^%w %-%_%.%~])", function(c)
-		return ("%%%02X"):format(string.byte(c))
-	end)
-	str = str:gsub(" ", "+")
-	return str
-end
-
 local function dropdownValue(options, filterValue, defaultIndex)
 	local idx = tonumber(filterValue)
 	if idx == nil then
@@ -187,6 +175,8 @@ local function storyIdFromURL(url)
 end
 
 local function normalizeNovelURL(url)
+	-- Rewrite mobile URLs to desktop
+	url = url:gsub("^https?://m%.fanfiction%.net", "https://www.fanfiction.net")
 	local id = storyIdFromURL(url)
 	if id then
 		return "/s/" .. id .. "/"
@@ -528,83 +518,6 @@ local function parseInfoDataIntoNovelInfo(storyInfoDocument, novelURL, novelTitl
 	}
 end
 
-local function abbrevToCount(value)
-	if value == nil then
-		return 0
-	end
-	value = tostring(value):gsub(",", ""):gsub("%s+", ""):lower()
-	local num, suffix = value:match("^([%d%.]+)([km%+]*)$")
-	if num == nil then
-		return parseCount(value)
-	end
-	local n = tonumber(num) or 0
-	if suffix:find("k", 1, true) then
-		n = n * 1000
-	elseif suffix:find("m", 1, true) then
-		n = n * 1000000
-	end
-	return math.floor(n)
-end
-
--- Mobile story pages use a compact comma-separated header instead of span.xgray.
-local function parseMobileMetaText(text)
-	text = (text or ""):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
-	local ratedChunk = text:match("[Rr]ated:%s*(.-)%s*[Pp]ublished:")
-			or text:match("[Rr]ated:%s*(.-)%s*[Uu]pdated:")
-			or text:match("[Rr]ated:%s*(.+)$")
-	if ratedChunk == nil then
-		return nil
-	end
-
-	local parts = {}
-	for raw in (ratedChunk .. ","):gmatch("(.-),") do
-		local part = raw:match("^%s*(.-)%s*$")
-		if part ~= nil and part ~= "" then
-			table.insert(parts, part)
-		end
-	end
-
-	local rating, language, tags, characters
-	local wordCount, favCount, followsCount, reviewCount, chapterCount = 0, 0, 0, 0, 0
-	for _, part in ipairs(parts) do
-		if startsWith(part, "Words:") then
-			wordCount = abbrevToCount(part:gsub("Words:%s*", ""))
-		elseif startsWith(part, "Favs:") then
-			favCount = abbrevToCount(part:gsub("Favs:%s*", ""))
-		elseif startsWith(part, "Follows:") then
-			followsCount = abbrevToCount(part:gsub("Follows:%s*", ""))
-		elseif startsWith(part, "Reviews:") then
-			reviewCount = abbrevToCount(part:gsub("Reviews:%s*", ""))
-		elseif startsWith(part, "Chapters:") then
-			chapterCount = abbrevToCount(part:gsub("Chapters:%s*", ""))
-		elseif rating == nil then
-			rating = part:gsub("^Fiction%s+", "")
-		elseif language == nil then
-			language = part
-		else
-			local genreCandidate = part:gsub("%s*&%s*", "/")
-			local genres = getGenres(genreCandidate)
-			if tags == nil and genres ~= nil then
-				tags = genres
-			elseif characters == nil then
-				characters = part
-			end
-		end
-	end
-
-	return {
-		rating = rating,
-		language = language,
-		tags = tags or {},
-		characters = characters or "",
-		wordCount = wordCount,
-		favCount = favCount,
-		followsCount = followsCount,
-		reviewCount = reviewCount,
-		chapterCount = chapterCount,
-	}
-end
-
 local function novelInfoFromParsed(infoData, novelURL, novelTitle, thumbnail, extras)
 	extras = extras or {}
 	local tags = {}
@@ -697,7 +610,8 @@ local function buildChapters(document, storyId, novelTitle)
 		}
 	end
 
-	local chapterCount = tonumber((html:match("Chapters:%s*([%d,]+)") or ""):gsub(",", ""))
+	local chapterMatch = html:match("Chapters:%s*([%d,]+)")
+	local chapterCount = chapterMatch and tonumber(chapterMatch:gsub(",", ""))
 	if chapterCount ~= nil and chapterCount > 0 and storyId ~= nil then
 		local chapters = {}
 		for i = 1, chapterCount do
@@ -771,77 +685,22 @@ local function parseNovel(novelURL, loadChapters)
 		end
 	end
 
-	-- Mobile / stripped layout fallback (no #profile_top / span.xgray)
+	-- Fallback if desktop parsing failed
 	if info == nil then
-		local titleEl = document:selectFirst("#content div[align=center] b")
-				or document:selectFirst("#content b")
-				or document:selectFirst("div[align=center] b")
-				or document:selectFirst("b")
-		novelTitle = (titleEl and titleEl:text()) or novelTitle or "Unknown Title"
-
-		if authors == nil then
-			local authorEl = document:selectFirst("#content a[href*='/u/']")
-					or document:selectFirst("a[href*='/u/']")
-			if authorEl ~= nil then
-				authors = { authorEl:text() }
+		local pageTitle = document:selectFirst("title")
+		if pageTitle ~= nil then
+			local t = pageTitle:text():gsub("^Fanfic:%s*", ""):gsub("%s*Ch%s*%d+.*$", "")
+			if t ~= nil and t ~= "" then
+				novelTitle = t
 			end
 		end
-
-		thumbnail = thumbnail or extractStoryImage(document, profile)
-
-		local content = document:selectFirst("#content") or document:selectFirst("body")
-		local contentText = content and content:text() or document:text()
-		local mobileMeta = parseMobileMetaText(contentText)
-
-		-- Chapter count from JS when mobile omits Chapters: in the header
-		local html = document:html()
-		local chs = tonumber(html:match("var%s+chs%s*=%s*(%d+)"))
-		if mobileMeta ~= nil and (mobileMeta.chapterCount == nil or mobileMeta.chapterCount == 0) and chs then
-			mobileMeta.chapterCount = chs
-		end
-
-		local dates = document:select("span[data-xutime]")
-		local updated, published = 0, 0
-		if dates ~= nil and dates:size() >= 2 then
-			published = (tonumber(dates:get(0):attr("data-xutime")) or 0) * 1000
-			updated = (tonumber(dates:get(1):attr("data-xutime")) or 0) * 1000
-		elseif dates ~= nil and dates:size() == 1 then
-			published = (tonumber(dates:get(0):attr("data-xutime")) or 0) * 1000
-			updated = published
-		end
-
-		if mobileMeta ~= nil then
-			mobileMeta.updated = updated
-			mobileMeta.published = published
-			mobileMeta.completed = contentText:match("Status:%s*Complete") ~= nil
-			mobileMeta.relationships = {}
-			info = novelInfoFromParsed(
-					mobileMeta,
-					normalized,
-					novelTitle,
-					thumbnail,
-					{ description = description or "", authors = authors }
-			)
-		else
-			-- Last resort: still return title/author/chapters rather than hard-failing
-			if novelTitle == nil or novelTitle == "Unknown Title" then
-				local pageTitle = document:selectFirst("title")
-				if pageTitle ~= nil then
-					local t = pageTitle:text():gsub("^Fanfic:%s*", ""):gsub("%s*Ch%s*%d+.*$", "")
-					if t ~= nil and t ~= "" then
-						novelTitle = t
-					end
-				end
-			end
-			info = NovelInfo {
-				title = novelTitle or "Unknown Title",
-				link = normalized,
-				imageURL = thumbnail,
-				authors = authors,
-				description = description or "",
-				chapterCount = chs,
-			}
-		end
+		info = NovelInfo {
+			title = novelTitle or "Unknown Title",
+			link = normalized,
+			imageURL = thumbnail,
+			authors = authors,
+			description = description or "",
+		}
 	end
 
 	if loadChapters then
@@ -982,57 +841,24 @@ local function searchFilters()
 	}
 end
 
---- Build ?a=b&c=d query string (no leading ?).
-local function buildQuery(params)
-	local parts = {}
-	for _, pair in ipairs(params) do
-		local k, v = pair[1], pair[2]
-		if v ~= nil and v ~= "" then
-			table.insert(parts, urlEncode(tostring(k)) .. "=" .. urlEncode(tostring(v)))
-		end
-	end
-	return table.concat(parts, "&")
-end
-
 --- @param filters table
---- @return table list of {key,value}
-local function filterQueryPairs(filters)
-	local pairs = {
-		{ "srt", dropdownValue(SortOptions, filters[SORT_ID], 1) },
-		{ "r", dropdownValue(RatingOptions, filters[RATING_ID], 1) },
+--- @return table<string, string> key-value map for url.querystring
+local function filterQueryMap(filters)
+	local result = {
+		srt = dropdownValue(SortOptions, filters[SORT_ID], 1),
+		r = dropdownValue(RatingOptions, filters[RATING_ID], 1),
 	}
-	if filters[TIME_RANGE_ID] ~= nil then
-		table.insert(pairs, { "t", dropdownValue(TimeRangeOptions, filters[TIME_RANGE_ID], 1) })
+	local function set(key, val)
+		if val ~= "0" then result[key] = val end
 	end
-	if filters[GENRE_A_ID] ~= nil then
-		table.insert(pairs, { "g1", dropdownValue(GenreOptions, filters[GENRE_A_ID], 1) })
-	end
-	if filters[GENRE_B_ID] ~= nil then
-		table.insert(pairs, { "g2", dropdownValue(GenreOptions, filters[GENRE_B_ID], 1) })
-	end
-	if filters[LANGUAGE_ID] ~= nil then
-		table.insert(pairs, { "lan", dropdownValue(LanguageOptions, filters[LANGUAGE_ID], 1) })
-	end
-	if filters[LENGTH_ID] ~= nil then
-		table.insert(pairs, { "len", dropdownValue(LengthOptions, filters[LENGTH_ID], 1) })
-	end
-	if filters[STATUS_ID] ~= nil then
-		table.insert(pairs, { "s", dropdownValue(StatusOptions, filters[STATUS_ID], 1) })
-	end
-	if filters[GENRE_EXCLUDE_ID] ~= nil then
-		table.insert(pairs, { "_g1", dropdownValue(GenreOptions, filters[GENRE_EXCLUDE_ID], 1) })
-	end
-	return pairs
-end
-
-local function withQuery(url, query)
-	if query == nil or query == "" then
-		return url
-	end
-	if url:find("?", 1, true) then
-		return url .. "&" .. query
-	end
-	return url .. "?" .. query
+	set("t", dropdownValue(TimeRangeOptions, filters[TIME_RANGE_ID], 1))
+	set("g1", dropdownValue(GenreOptions, filters[GENRE_A_ID], 1))
+	set("g2", dropdownValue(GenreOptions, filters[GENRE_B_ID], 1))
+	set("lan", dropdownValue(LanguageOptions, filters[LANGUAGE_ID], 1))
+	set("len", dropdownValue(LengthOptions, filters[LENGTH_ID], 1))
+	set("s", dropdownValue(StatusOptions, filters[STATUS_ID], 1))
+	set("_g1", dropdownValue(GenreOptions, filters[GENRE_EXCLUDE_ID], 1))
+	return result
 end
 
 local function isBrowsePath(path)
@@ -1104,55 +930,55 @@ local function search(filters)
 		end
 		-- Strip existing page query then apply filters + page
 		browseURL = browseURL:gsub("[?&]p=%d+", ""):gsub("?$", "")
-		local q = buildQuery(filterQueryPairs(filters))
-		q = q .. (q ~= "" and "&" or "") .. "p=" .. tostring(page)
-		local document = GETDocument(withQuery(browseURL, q))
+		local queryMap = filterQueryMap(filters)
+		queryMap.p = tostring(page)
+		local document = GETDocument(url.querystring(queryMap, browseURL))
 		return parseListingDocument(document)
 	end
 
 	-- Keyword search — do not apply category-browse filter params (they empty results).
 	-- Filters are optional extras only where FFN search form understands them.
-	local params = {
-		{ "keywords", query },
-		{ "ready", "1" },
-		{ "type", "story" },
-		{ "match", "any" },
-		{ "ppage", tostring(page) },
+	local searchParams = {
+		keywords = query,
+		ready = "1",
+		type = "story",
+		match = "any",
+		ppage = tostring(page),
 	}
 	-- Optional language only (common need); 0 means any
 	if filters[LANGUAGE_ID] ~= nil then
 		local lan = dropdownValue(LanguageOptions, filters[LANGUAGE_ID], 1)
 		if lan ~= nil and lan ~= "0" then
-			table.insert(params, { "languageid", lan })
+			searchParams.languageid = lan
 		end
 	end
 	if filters[STATUS_ID] ~= nil then
 		local st = dropdownValue(StatusOptions, filters[STATUS_ID], 1)
 		if st ~= nil and st ~= "0" then
-			table.insert(params, { "statusid", st })
+			searchParams.statusid = st
 		end
 	end
 	if filters[GENRE_A_ID] ~= nil then
 		local g = dropdownValue(GenreOptions, filters[GENRE_A_ID], 1)
 		if g ~= nil and g ~= "0" then
-			table.insert(params, { "genreid", g })
+			searchParams.genreid = g
 		end
 	end
 	if filters[GENRE_B_ID] ~= nil then
 		local g = dropdownValue(GenreOptions, filters[GENRE_B_ID], 1)
 		if g ~= nil and g ~= "0" then
-			table.insert(params, { "genreid2", g })
+			searchParams.genreid2 = g
 		end
 	end
 	if filters[RATING_ID] ~= nil then
 		-- FFN search uses censorid roughly; keep simple — only pass when not All
 		local r = dropdownValue(RatingOptions, filters[RATING_ID], 1)
 		if r ~= nil and r ~= "10" then
-			table.insert(params, { "censorid", r })
+			searchParams.censorid = r
 		end
 	end
 
-	local searchURL = expandURL("/search/?" .. buildQuery(params))
+	local searchURL = url.querystring(searchParams, expandURL("/search/"))
 	local document = GETDocument(searchURL)
 	return parseListingDocument(document)
 end
@@ -1187,10 +1013,6 @@ return {
 	parseNovel = parseNovel,
 	search = search,
 	searchFilters = searchFilters(),
-
-	updateSetting = function(id, value)
-		settings[id] = value
-	end,
 
 	shrinkURL = shrinkURL,
 	expandURL = expandURL
