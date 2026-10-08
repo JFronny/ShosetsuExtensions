@@ -1,4 +1,4 @@
--- {"id":1308639979,"ver":"1.0.13","libVer":"1.0.0","author":"Jobobby04"}
+-- {"id":1308639979,"ver":"1.0.15","libVer":"1.0.0","author":"Jobobby04"}
 
 local url = Require("url")
 
@@ -153,7 +153,6 @@ local function dropdownValue(options, filterValue, defaultIndex)
 		end
 		return options[defaultIndex or 1].value
 	end
-	-- Shosetsu dropdowns are 0-based
 	local option = options[idx + 1]
 	if option == nil then
 		return options[defaultIndex or 1].value
@@ -298,7 +297,7 @@ local function parseStoryInfo(storyInfoDocument)
 	storyInfo = storyInfo:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
 
 	local rating, language, tags, characters
-	local chapterCount, wordCount, reviewCount, favCount, followsCount = 0, 0, 0, 0, 0
+	local chapterCount, wordCount, reviewCount, favCount = 0, 0, 0, 0
 
 	local storyInfoTable = splitMeta(storyInfo)
 	for k, v in ipairs(storyInfoTable) do
@@ -310,13 +309,11 @@ local function parseStoryInfo(storyInfoDocument)
 			reviewCount = v:gsub("Reviews:%s*", "")
 		elseif startsWith(v, "Favs:") then
 			favCount = v:gsub("Favs:%s*", "")
-		elseif startsWith(v, "Follows:") then
-			followsCount = v:gsub("Follows:%s*", "")
 		elseif startsWith(v, "Rated:") then
 			rating = v:gsub("Rated:%s*", "")
 			rating = rating:gsub("^Fiction%s+", "")
-		elseif startsWith(v, "Updated:") or startsWith(v, "Published:") or startsWith(v, "id:") then
-			-- ignore date/id text; timestamps come from data-xutime
+		elseif startsWith(v, "Follows:") or startsWith(v, "Updated:") or startsWith(v, "Published:") or startsWith(v, "id:") then
+			-- others are positional
 		elseif k == 2 then
 			language = v
 		else
@@ -337,22 +334,12 @@ local function parseStoryInfo(storyInfoDocument)
 		tags = {}
 	end
 
-	local dates = storyInfoDocument:select("span[data-xutime]")
-	local updated, published = 0, 0
-	if dates ~= nil and dates:size() >= 2 then
-		updated = (tonumber(dates:get(0):attr("data-xutime")) or 0) * 1000
-		published = (tonumber(dates:get(1):attr("data-xutime")) or 0) * 1000
-	elseif dates ~= nil and dates:size() == 1 then
-		published = (tonumber(dates:get(0):attr("data-xutime")) or 0) * 1000
-		updated = published
-	end
 	local completedStatus = storyInfo:match("Status: Complete") or storyInfo:match(" %- Complete")
 
 	chapterCount = parseCount(chapterCount)
 	wordCount = parseCount(wordCount)
 	reviewCount = parseCount(reviewCount)
 	favCount = parseCount(favCount)
-	followsCount = parseCount(followsCount)
 
 	local characterTable = {}
 	local relationshipTable = {}
@@ -384,9 +371,6 @@ local function parseStoryInfo(storyInfoDocument)
 		wordCount = wordCount,
 		reviewCount = reviewCount,
 		favCount = favCount,
-		followsCount = followsCount,
-		updated = updated,
-		published = published,
 		characters = characterTable,
 		relationships = relationshipTable,
 		completed = completedStatus ~= nil
