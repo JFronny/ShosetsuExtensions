@@ -1,4 +1,4 @@
--- {"id":1308639979,"ver":"1.0.21","libVer":"1.0.0","author":"Jobobby04"}
+-- {"id":1308639979,"ver":"1.0.22","libVer":"1.0.0","author":"Jobobby04"}
 
 local url = Require("url")
 
@@ -190,25 +190,25 @@ local STORY_TEXT_SELECTOR = "#storytext, #storycontent, .storytextp .storytext"
 ---@return Document, string
 local function fetchDocument(contentSelector, ...)
     local args = table.pack(...)
-    local firstDocument, firstPath = nil, nil
+    local firstDocument = nil
     for i = 1, args.n do
         local path = args[i]
         local document = GETDocument(expandURL(path))
         if i == 1 then
-            firstDocument, firstPath = document, path
+            firstDocument = document
         end
         if document:selectFirst(contentSelector) ~= nil then
-            return document, path
+            return document
         end
 
         -- check for message 1 (not found/cached), otherwise try fallback
         local bodyText = document:text() or ""
         if not (bodyText:find("FanFiction.Net Message Type 1", 1, true) or bodyText:find("Story does not have any chapters", 1, true)) then
-            return document, path
+            return document
         end
     end
 
-	return firstDocument, firstPath
+	return firstDocument
 end
 
 ---@param chapterPath string
@@ -350,20 +350,8 @@ local function extractStoryImage(document, profile)
 end
 
 ---@param storyInfoDocument Element
----@param novelURL string
----@param novelTitle string
----@param thumbnail string | nil
----@return NovelInfo
-local function parseInfoDataIntoNovelInfo(storyInfoDocument, novelURL, novelTitle, thumbnail, extras)
-	extras = extras or {}
-    local result = NovelInfo {
-        link = novelURL,
-        title = novelTitle,
-        imageURL = thumbnail,
-        description = extras.description,
-        authors = extras.authors,
-    }
-
+---@param outputInfo NovelInfo
+local function parseNovelInfoFromMeta(storyInfoDocument, outputInfo)
 	local storyInfo = storyInfoDocument:text()
 	storyInfo = storyInfo:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
 
@@ -375,19 +363,19 @@ local function parseInfoDataIntoNovelInfo(storyInfoDocument, novelURL, novelTitl
 			return v:sub(1, #start) == start
 		end
 		if startsWith("Chapters:") then
-			result:setChapterCount(parseCount(v:gsub("Chapters:%s*", "")))
+			outputInfo:setChapterCount(parseCount(v:gsub("Chapters:%s*", "")))
 		elseif startsWith("Words:") then
-			result:setWordCount(parseCount(v:gsub("Words:%s*", "")))
+			outputInfo:setWordCount(parseCount(v:gsub("Words:%s*", "")))
 		elseif startsWith("Reviews:") then
-			result:setCommentCount(parseCount(v:gsub("Reviews:%s*", "")))
+			outputInfo:setCommentCount(parseCount(v:gsub("Reviews:%s*", "")))
 		elseif startsWith("Favs:") then
-			result:setFavoriteCount(parseCount(v:gsub("Favs:%s*", "")))
+			outputInfo:setFavoriteCount(parseCount(v:gsub("Favs:%s*", "")))
 		elseif startsWith("Rated:") then
 		    table.insert(genres, "Rating: " .. v:gsub("Rated:%s*", ""):gsub("^Fiction%s+", ""))
 		elseif startsWith("Follows:") or startsWith("Updated:") or startsWith("Published:") or startsWith("id:") then
 			-- others are positional
 		elseif k == 2 then
-			result:setLanguage(v)
+			outputInfo:setLanguage(v)
         elseif not tags then
             tags = getGenres(v)
             if tags == nil then
@@ -399,9 +387,9 @@ local function parseInfoDataIntoNovelInfo(storyInfoDocument, novelURL, novelTitl
 	end
 
 	if storyInfo:match("Status: Complete") or storyInfo:match(" %- Complete") then
-        result:setStatus(NovelStatus.COMPLETED)
+        outputInfo:setStatus(NovelStatus.COMPLETED)
     else
-        result:setStatus(NovelStatus.PUBLISHING)
+        outputInfo:setStatus(NovelStatus.PUBLISHING)
 	end
 
 	if tags ~= nil then
@@ -430,9 +418,7 @@ local function parseInfoDataIntoNovelInfo(storyInfoDocument, novelURL, novelTitl
             end
         end
 	end
-    result:setGenres(genres)
-
-	return result
+    outputInfo:setGenres(genres)
 end
 
 local function buildChapters(document, storyId, novelTitle)
@@ -514,61 +500,51 @@ local function parseNovel(novelURL, loadChapters)
 
 	local storyId = storyIdFromURL(novelURL)
 	local normalized = normalizeNovelURL(novelURL)
-	-- Some stories return "Message Type 1" with trailing slash. Retry without
-	local document, usedPath = fetchDocument("#profile_top", normalized .. "/", normalized)
-	normalized = usedPath
+	local info = NovelInfo {
+        title = "Unknown Title",
+        link = normalized,
+        description = ""
+    }
+
+	local document = fetchDocument("#profile_top", normalized .. "/", normalized)
 
 	local profile = document:selectFirst("#profile_top")
-	local novelTitle, thumbnail, authors, description, info
-
 	if profile ~= nil then -- may be null with mobile UA
-		local titleEl = profile:selectFirst("b.xcontrast_txt")
-				or profile:selectFirst("b")
-		novelTitle = titleEl and titleEl:text() or "Unknown Title"
+		local titleEl = profile:selectFirst("b.xcontrast_txt") or profile:selectFirst("b")
+		if titleEl ~= nil then
+		    info:setTitle(titleEl:text())
+		end
 
-		thumbnail = extractStoryImage(document, profile)
+		info:setImageURL(extractStoryImage(document, profile))
 
 		local authorEl = profile:selectFirst("a[href*='/u/']")
 		if authorEl ~= nil then
-			authors = { authorEl:text() }
+            info:setAuthors({ authorEl:text() })
 		end
 
 		local descEl = profile:selectFirst("div.xcontrast_txt")
-		description = descEl and descEl:text() or ""
+		info:setDescription(descEl and descEl:text() or "")
 
 		local meta = profile:selectFirst("span.xgray, .xgray, span.xgray.xcontrast_txt")
 				or document:selectFirst("span.xgray, .xgray")
 		if meta ~= nil then
-			info = parseInfoDataIntoNovelInfo(
-					meta,
-					usedPath,
-					novelTitle,
-					thumbnail,
-					{ description = description, authors = authors }
-			)
+			parseNovelInfoFromMeta(meta, info)
 		end
 	end
 
 	-- Fallback if desktop parsing failed
-	if info == nil then
+	if info:getTitle() == "Unknown Title" then
 		local pageTitle = document:selectFirst("title")
 		if pageTitle ~= nil then
 			local t = pageTitle:text():gsub("^Fanfic:%s*", ""):gsub("%s*Ch%s*%d+.*$", "")
 			if t ~= nil and t ~= "" then
-				novelTitle = t
+				info:setTitle(setTitle)
 			end
 		end
-		info = NovelInfo {
-			title = novelTitle or "Unknown Title",
-			link = normalized,
-			imageURL = thumbnail,
-			authors = authors,
-			description = description or "",
-		}
 	end
 
 	if loadChapters then
-		info:setChapters(AsList(buildChapters(document, storyId, novelTitle or "Chapter")))
+		info:setChapters(AsList(buildChapters(document, storyId, info:getTitle())))
 	end
 
 	return info
@@ -591,15 +567,16 @@ local function parseBrowseNovel(document)
 	local thumbnail = extractImage(titleElement)
 			or extractImage(document:selectFirst("img.cimage, img"))
 			or extractImage(document)
+	local info = NovelInfo {
+        title = title,
+        link = url,
+        imageURL = thumbnail
+    }
 	local meta = document:selectFirst("div.xgray, span.xgray, .xgray")
-	if meta == nil then
-		return NovelInfo {
-			title = title,
-			link = url,
-			imageURL = thumbnail
-		}
+	if meta ~= nil then
+		parseNovelInfoFromMeta(meta, info)
 	end
-	return parseInfoDataIntoNovelInfo(meta, url, title, thumbnail)
+	return info
 end
 
 local function parseListingDocument(document)
