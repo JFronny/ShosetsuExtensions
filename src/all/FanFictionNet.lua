@@ -1,4 +1,4 @@
--- {"id":1308639979,"ver":"1.0.22","libVer":"1.0.0","author":"Jobobby04"}
+-- {"id":1308639979,"ver":"1.0.23","libVer":"1.0.0","author":"JFronny, Jobobby04, capthehacker99"}
 
 local url = Require("url")
 
@@ -236,17 +236,6 @@ local function getPassage(chapterPath)
 	return pageOfElem(chap, true)
 end
 
-local function split(str, delimiter)
-	local result = {}
-	if str == nil or str == "" then
-		return result
-	end
-	for match in (str .. delimiter):gmatch("(.-)" .. delimiter) do
-		table.insert(result, match)
-	end
-	return result
-end
-
 -- FanFiction separates metadata with " - "
 local function splitMeta(query)
 	local res = {}
@@ -267,38 +256,13 @@ local function getGenres(genreString)
 	if genreString == nil or genreString == "" then
 		return nil
 	end
-	local genres = split(genreString, "/")
-	for _, genre in ipairs(genres) do
+	local genres = {}
+	for genre in (genreString .. "/"):gmatch("(.-)/") do
 		if genreByNameToValue[genre] == nil then
 			return nil
 		end
 	end
 	return genres
-end
-
-local function parseCount(value)
-	if value == nil then
-		return 0
-	end
-	if type(value) == "number" then
-		return value
-	end
-	value = tostring(value):gsub(",", ""):gsub("%s+", "")
-	return tonumber(value) or 0
-end
-
-local function isPlaceholderImage(src)
-	if src == nil or src == "" then
-		return true
-	end
-	src = tostring(src):lower()
-	if src:find("d_60_90", 1, true) or src:find("/static/images/", 1, true) then
-		return true
-	end
-	if src:find("data:image", 1, true) then
-		return true
-	end
-	return false
 end
 
 local function extractImage(element)
@@ -318,8 +282,12 @@ local function extractImage(element)
 	local attrs = { "data-original", "data-src", "data-lazy-src", "src" }
 	for _, name in ipairs(attrs) do
 		local src = img:attr(name)
-		if src ~= nil and src ~= "" and not isPlaceholderImage(src) then
-			return expandURL(src)
+		if src ~= nil and src ~= "" then
+	        src = tostring(src):lower()
+            local isPlaceholder = src:find("d_60_90", 1, true) or src:find("/static/images/", 1, true) or src:find("data:image", 1, true)
+            if not isPlaceholder then
+			    return expandURL(src)
+            end
 		end
 	end
 	return nil
@@ -362,6 +330,16 @@ local function parseNovelInfoFromMeta(storyInfoDocument, outputInfo)
 		local function startsWith(start)
 			return v:sub(1, #start) == start
 		end
+        local function parseCount(value)
+            if value == nil then
+                return 0
+            end
+            if type(value) == "number" then
+                return value
+            end
+            value = tostring(value):gsub(",", ""):gsub("%s+", "")
+            return tonumber(value) or 0
+        end
 		if startsWith("Chapters:") then
 			outputInfo:setChapterCount(parseCount(v:gsub("Chapters:%s*", "")))
 		elseif startsWith("Words:") then
@@ -550,45 +528,24 @@ local function parseNovel(novelURL, loadChapters)
 	return info
 end
 
----@param document Element
----@return NovelInfo
-local function parseBrowseNovel(document)
-	local titleElement = document:selectFirst("a.stitle")
-			or document:selectFirst(".stitle")
-			or document:selectFirst("a[href*='/s/']")
-	if titleElement == nil then
-		return nil
-	end
-	local title = titleElement:text()
-	if title == nil or title == "" then
-		return nil
-	end
-	local url = normalizeNovelURL(titleElement:attr("href"))
-	local thumbnail = extractImage(titleElement)
-			or extractImage(document:selectFirst("img.cimage, img"))
-			or extractImage(document)
-	local info = NovelInfo {
-        title = title,
-        link = url,
-        imageURL = thumbnail
-    }
-	local meta = document:selectFirst("div.xgray, span.xgray, .xgray")
-	if meta ~= nil then
-		parseNovelInfoFromMeta(meta, info)
-	end
-	return info
-end
-
 local function parseListingDocument(document)
 	local results = {}
 	local seen = {}
 
 	local function addFromRow(row)
-		local novel = parseBrowseNovel(row)
-		if novel == nil then
+        local titleElement = row:selectFirst("a.stitle")
+            or row:selectFirst(".stitle")
+            or row:selectFirst("a[href*='/s/']")
+        local title = titleElement and titleElement:text()
+        if title == nil or title == "" then
+            return
+        end
+        local link = normalizeNovelURL(titleElement:attr("href"))
+		-- Prefer entries that already have published chapter text
+		if seen[link] then
 			return
 		end
-		-- Prefer entries that already have published chapter text; brand-new stubs break passage tests.
+        seen[link] = true
 		local rowText = row:text() or ""
 		local chaptersMeta = rowText:match("Chapters:%s*([%d,]+)")
 		if chaptersMeta ~= nil then
@@ -597,14 +554,19 @@ local function parseListingDocument(document)
 				return
 			end
 		end
-		local link = novel:getLink()
-		if link ~= nil and seen[link] then
-			return
-		end
-		if link ~= nil then
-			seen[link] = true
-		end
-		table.insert(results, novel)
+
+        local info = NovelInfo {
+            title = title,
+            link = link,
+            imageURL = extractImage(titleElement)
+                or extractImage(row:selectFirst("img.cimage, img"))
+                or extractImage(row)
+        }
+        local meta = row:selectFirst("div.xgray, span.xgray, .xgray")
+        if meta ~= nil then
+            parseNovelInfoFromMeta(meta, info)
+        end
+		table.insert(results, info)
 	end
 
 	local rows = document:select("div.z-list, .z-list")
@@ -704,7 +666,6 @@ local function search(filters)
 	local path = shrinkURL(query)
 	-- Full or relative browse/category URL
 	if query:find("fanfiction%.net") or isBrowsePath(path) then
-		-- expandURL normalizes full, protocol-relative and relative paths
 		local browseURL = expandURL(path):gsub("[?&]p=%d+", ""):gsub("?$", "")
 		local queryMap = filterQueryMap(filters)
 		queryMap.p = tostring(page)
@@ -720,7 +681,6 @@ local function search(filters)
 		match = "any",
 		ppage = tostring(page),
 	}
-	-- Optional filters for keyword search
 	local function searchFilter(key, id, opts, default, exclude)
 		local val = dropdownValue(opts, filters[id], default)
 		if val ~= nil and val ~= "0" and val ~= exclude then

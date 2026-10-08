@@ -15,9 +15,23 @@
 			"website": ""
 		},
 		{
+			"id": -931466336,
+			"name": "JFronny",
+			"desc": "Worked on FanFiction.net",
+			"imageURL": "",
+			"website": ""
+		},
+		{
 			"id": -821183208,
 			"name": "TechnoJo4",
 			"desc": "Worked on url",
+			"imageURL": "",
+			"website": ""
+		},
+		{
+			"id": 944991117,
+			"name": "capthehacker99",
+			"desc": "Worked on FanFiction.net",
 			"imageURL": "",
 			"website": ""
 		}
@@ -181,9 +195,9 @@
 			"fileName": "FanFictionNet",
 			"imageURL": "https://www.fanfiction.net/static/icons3/ff-icon-192.png",
 			"lang": "all",
-			"ver": "1.0.22",
+			"ver": "1.0.23",
 			"libVer": "1.0.0",
-			"md5": "203e4d595bb621e77d7092920f480a66537732585d32adb5fa4a07b07a496eb0",
+			"md5": "7243cbf739748f99bd88873ebf392e6f55928d4d88a0436e56e04b1c831417b7",
 			"type": "LuaScript"
 		}
 	],
