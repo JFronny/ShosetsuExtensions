@@ -1,4 +1,4 @@
--- {"id":1308639979,"ver":"1.0.19","libVer":"1.0.0","author":"Jobobby04"}
+-- {"id":1308639979,"ver":"1.0.21","libVer":"1.0.0","author":"Jobobby04"}
 
 local url = Require("url")
 
@@ -185,27 +185,25 @@ end
 
 local STORY_TEXT_SELECTOR = "#storytext, #storycontent, .storytextp .storytext"
 
---- Fetch `path`; if the document is an error stub, retry `fallbackPath` and use
---- that document when it is not a stub itself.
+---@param contentSelector string
+---@param ... string
+---@return Document, string
 local function fetchDocument(contentSelector, ...)
-    local function isMessagePage(document)
-        if document:selectFirst(contentSelector) ~= nil then
-            return false
-        end
-        local bodyText = document:text() or ""
-        return bodyText:find("FanFiction.Net Message Type 1", 1, true) or bodyText:find("Story does not have any chapters", 1, true)
-    end
-
     local args = table.pack(...)
     local firstDocument, firstPath = nil, nil
     for i = 1, args.n do
         local path = args[i]
         local document = GETDocument(expandURL(path))
         if i == 1 then
-            firstDocument = document
-            firstPath = path
+            firstDocument, firstPath = document, path
         end
-        if not isMessagePage(document) then
+        if document:selectFirst(contentSelector) ~= nil then
+            return document, path
+        end
+
+        -- check for message 1 (not found/cached), otherwise try fallback
+        local bodyText = document:text() or ""
+        if not (bodyText:find("FanFiction.Net Message Type 1", 1, true) or bodyText:find("Story does not have any chapters", 1, true)) then
             return document, path
         end
     end
@@ -213,13 +211,18 @@ local function fetchDocument(contentSelector, ...)
 	return firstDocument, firstPath
 end
 
---- @param chapterPath string
---- @return string
+---@param chapterPath string
+---@return string
 local function getPassage(chapterPath)
 	-- Some stories publish text only on /s/{id}/ and reject /s/{id}/1/ with Message Type 1
 	local storyId = storyIdFromURL(chapterPath)
 	local fallbackPath = storyId ~= nil and "/s/" .. storyId or chapterPath
-	local document = fetchDocument(STORY_TEXT_SELECTOR, chapterPath, chapterPath .. "/", fallbackPath, fallbackPath .. "/")
+	local document
+	if storyId ~= nil and ((chapterPath == "/s/" .. storyId .. "/1") or (chapterPath == "/s/" .. storyId .. "/1/")) then
+	    document = fetchDocument(STORY_TEXT_SELECTOR, chapterPath, chapterPath .. "/", fallbackPath, fallbackPath .. "/")
+    else
+	    document = fetchDocument(STORY_TEXT_SELECTOR, chapterPath, chapterPath .. "/")
+    end
 
 	local bodyText = document:text() or ""
 	if bodyText:find("Story Not Found", 1, true) then
@@ -346,11 +349,11 @@ local function extractStoryImage(document, profile)
 	return nil
 end
 
---- @param storyInfoDocument Element
---- @param novelURL string
---- @param novelTitle string
---- @param thumbnail string | nil
---- @return NovelInfo
+---@param storyInfoDocument Element
+---@param novelURL string
+---@param novelTitle string
+---@param thumbnail string | nil
+---@return NovelInfo
 local function parseInfoDataIntoNovelInfo(storyInfoDocument, novelURL, novelTitle, thumbnail, extras)
 	extras = extras or {}
     local result = NovelInfo {
@@ -364,10 +367,10 @@ local function parseInfoDataIntoNovelInfo(storyInfoDocument, novelURL, novelTitl
 	local storyInfo = storyInfoDocument:text()
 	storyInfo = storyInfo:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
 
-	local rating, tags, characters
+	local tags, characters
+	local genres = {}
 
-	local storyInfoTable = splitMeta(storyInfo)
-	for k, v in ipairs(storyInfoTable) do
+	for k, v in ipairs(splitMeta(storyInfo)) do
 		local function startsWith(start)
 			return v:sub(1, #start) == start
 		end
@@ -380,70 +383,55 @@ local function parseInfoDataIntoNovelInfo(storyInfoDocument, novelURL, novelTitl
 		elseif startsWith("Favs:") then
 			result:setFavoriteCount(parseCount(v:gsub("Favs:%s*", "")))
 		elseif startsWith("Rated:") then
-			rating = v:gsub("Rated:%s*", "")
-			rating = rating:gsub("^Fiction%s+", "")
+		    table.insert(genres, "Rating: " .. v:gsub("Rated:%s*", ""):gsub("^Fiction%s+", ""))
 		elseif startsWith("Follows:") or startsWith("Updated:") or startsWith("Published:") or startsWith("id:") then
 			-- others are positional
 		elseif k == 2 then
 			result:setLanguage(v)
-		else
-			if tags ~= nil then
-				characters = v
-			else
-				tags = getGenres(v)
-				if tags == nil then
-					characters = v
-				end
-			end
-		end
-	end
-	if characters == nil then
-		characters = ""
-	end
-	if tags == nil then
-		tags = {}
-	end
-
-	local completedStatus = storyInfo:match("Status: Complete") or storyInfo:match(" %- Complete")
-
-	local characterTable = {}
-	local relationshipTable = {}
-	for rel_group in characters:gmatch("%[([^%]]+)%]") do
-		local relationship = {}
-		for rawChar in rel_group:gmatch("([^,]+)") do
-			local char = rawChar:match("^%s*(.-)%s*$")
-			if char ~= nil and char ~= "" then
-				table.insert(characterTable, char)
-				table.insert(relationship, char)
-			end
-		end
-		table.insert(relationshipTable, relationship)
-	end
-
-	local charText = characters:gsub("%[[^%]]+%]", "")
-	for rawChar in charText:gmatch("([^,]+)") do
-		local char = rawChar:match("^%s*(.-)%s*$")
-		if char ~= nil and char ~= "" then
-			table.insert(characterTable, char)
+        elseif not tags then
+            tags = getGenres(v)
+            if tags == nil then
+                characters = v
+            end
+        else
+            characters = v
 		end
 	end
 
-	local genres = {}
-	if rating ~= nil and rating ~= "" then
-		table.insert(genres, "Rating: " .. rating)
+	if storyInfo:match("Status: Complete") or storyInfo:match(" %- Complete") then
+        result:setStatus(NovelStatus.COMPLETED)
+    else
+        result:setStatus(NovelStatus.PUBLISHING)
 	end
-	for _, v in ipairs(tags) do
-		table.insert(genres, "Genre: " .. v)
+
+	if tags ~= nil then
+        for _, v in ipairs(tags) do
+            table.insert(genres, "Genre: " .. v)
+        end
 	end
-	for _, v in ipairs(relationshipTable) do
-		table.insert(genres, "Relationship: [" .. table.concat(v, ", ") .. "]")
-	end
-	for _, v in ipairs(characterTable) do
-		table.insert(genres, "Character: " .. v)
+	if characters ~= nil then
+        for rel_group in characters:gmatch("%[([^%]]+)%]") do
+            local relationship = {}
+            for rawChar in rel_group:gmatch("([^,]+)") do
+                local char = rawChar:match("^%s*(.-)%s*$")
+                if char ~= nil and char ~= "" then
+                    table.insert(genres, "Character: " .. char)
+                    table.insert(relationship, char)
+                end
+            end
+            table.insert(genres, "Relationship: [" .. table.concat(relationship, ", ") .. "]")
+        end
+
+        local charText = characters:gsub("%[[^%]]+%]", "")
+        for rawChar in charText:gmatch("([^,]+)") do
+            local char = rawChar:match("^%s*(.-)%s*$")
+            if char ~= nil and char ~= "" then
+                table.insert(genres, "Character: " .. char)
+            end
+        end
 	end
     result:setGenres(genres)
 
-    result:setStatus((completedStatus ~= nil) and NovelStatus.COMPLETED or NovelStatus.PUBLISHING)
 	return result
 end
 
@@ -513,9 +501,9 @@ local function buildChapters(document, storyId, novelTitle)
 	return {}
 end
 
---- @param novelURL string
---- @param loadChapters boolean
---- @return NovelInfo
+---@param novelURL string
+---@param loadChapters boolean
+---@return NovelInfo
 local function parseNovel(novelURL, loadChapters)
 	if novelURL:match("^how") then
 		return NovelInfo {
@@ -586,8 +574,8 @@ local function parseNovel(novelURL, loadChapters)
 	return info
 end
 
---- @param document Element
---- @return NovelInfo
+---@param document Element
+---@return NovelInfo
 local function parseBrowseNovel(document)
 	local titleElement = document:selectFirst("a.stitle")
 			or document:selectFirst(".stitle")
@@ -650,14 +638,14 @@ local function parseListingDocument(document)
 	end
 
 	if #results == 0 then
-		-- FanFiction.lua style / tighter mobile layouts
+		-- mobile layout?
 		local titles = document:select("#content_wrapper_inner a.stitle, a.stitle")
 		if titles ~= nil then
 			for i = 0, titles:size() - 1 do
 				local a = titles:get(i)
 				local parent = a:parent()
 				if parent ~= nil and parent:parent() ~= nil then
-					-- Prefer the z-list-like container when present
+					-- prefer the z-list-like container when present
 					local row = a:parent()
 					local guard = 0
 					while row ~= nil and guard < 5 do
@@ -682,8 +670,8 @@ local function parseListingDocument(document)
 	return results
 end
 
---- @param filters table
---- @return table<string, string> key-value map for url.querystring
+---@param filters table
+---@return table<string, string> key-value map for url.querystring
 local function filterQueryMap(filters)
 	local result = {
 		srt = dropdownValue(SortOptions, filters[SORT_ID], 1),
@@ -716,8 +704,8 @@ local function isBrowsePath(path)
 	return path:match("^/[^/]+/.+") ~= nil
 end
 
---- @param filters table @of applied filter values [QUERY] is the search query, may be empty
---- @return NovelInfo[]
+---@param filters table @of applied filter values [QUERY] is the search query, may be empty
+---@return NovelInfo[]
 local function search(filters)
 	local page = tonumber(filters[PAGE]) or 1
 	local query = filters[QUERY] or ""
